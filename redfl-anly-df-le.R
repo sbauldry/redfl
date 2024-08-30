@@ -118,9 +118,9 @@ dev.off()
 # function to read bootstrap data and extract results
 bsres <- function(fn) {
   bsd <- read_csv(fn)
-  est <- c( mean(bsd$e50), sd(bsd$e50), quantile(bsd$e50, 0.025), quantile(bsd$e50, 0.975), 
-            mean(bsd$dfe50), sd(bsd$dfe50), quantile(bsd$dfe50, 0.025), quantile(bsd$dfe50, 0.975), 
-            mean(bsd$dfe50)/mean(bsd$e50) )
+  est <- c( bsd$e50[1], sd(bsd$e50[-1]), quantile(bsd$e50[-1], 0.025), quantile(bsd$e50[-1], 0.975), 
+            mean(bsd$dfe50[1]), sd(bsd$dfe50[-1]), quantile(bsd$dfe50[-1], 0.025), quantile(bsd$dfe50[-1], 0.975), 
+            mean(bsd$dfe50[1])/mean(bsd$e50[1]) )
   return(est)
 }
 

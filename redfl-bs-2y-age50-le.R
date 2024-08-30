@@ -9,71 +9,38 @@ library(survival)
 library(survey)
 
 
-### Function for life table calculations
-lifetable <- function(x) {
-  
-  # calculate qx and lx
-  for(i in 1:nrow(x)) {
-    if(i < nrow(x)) {
-      x[i,"qx"] = (x[i,"nx"]*x[i,"mx"])/(1 + (x[i,"nx"] - x[i,"ax"])*x[i,"mx"])
-    }
-    if(i == nrow(x)) {
-      x[i,"qx"] = 1
-    }
-    
-    if(i == 1) {
-      x[i,"lx"] = 100000
-    }
-    if(i > 1) {
-      x[i,"lx"] = x[i-1,"lx"]*(1 - x[i-1,"qx"])
-    }
-  }
-  
-  # calculate dx, Lx, and dLx
-  for(i in 1:nrow(x)) {
-    if(i < nrow(x)) {
-      x[i,"dx"] = x[i,"lx"] - x[i+1,"lx"]
-      x[i,"Lx"] = x[i,"nx"]*x[i+1,"lx"] + x[i,"dx"]*x[i,"ax"]
-    }
-    if(i == nrow(x)) {
-      x[i,"dx"] = x[i,"lx"]
-      x[i,"Lx"] = x[i,"lx"]/x[i,"mx"]
-    }
-    x[i,"dLx"] = x[i,"Lx"]*(x[i,"dfp"])
-  }
-  
-  # calculate Tx and dTx
-  for(i in nrow(x):1) {
-    if(i < nrow(x)) {
-      x[i,"Tx"]  = x[i+1,"Tx"] + x[i,"Lx"]
-      x[i,"dTx"] = x[i+1,"dTx"] + x[i,"dLx"]
-    } 
-    if(i == nrow(x)) {
-      x[i,"Tx"]  = x[i,"Lx"]
-      x[i,"dTx"] = x[i,"dLx"]
-    }
-  }
-  
-  # calculate ex and dex
-  for(i in 1:nrow(x)) {
-    x[i,"ex"]  = x[i,"Tx"]/x[i,"lx"]
-    x[i,"dex"] = x[i,"dTx"]/x[i,"lx"]
-  }
-  
-  # return age-50 ex and dex
-  e <- x[1, c("agei", "ex", "dex")]
-  return(e)
+### Function for Sullivan life tables
+sullivan_life_table <- function(m, d, age) {
+  n            = c(diff(age), Inf)
+  a            = n*0.5
+  a[length(m)] = 1/m[length(m)]
+  q            = (n*m)/(1 + (n - a)*m)
+  q[length(m)] = 1
+  p            = 1 - q
+  l            = head(cumprod( c(1, p) ), -1)
+  L            = (n*l*p) + (a*l*q)
+  L[length(m)] = l[length(m)]/m[length(m)] 
+  e            = rev(cumsum( rev(L) ))/l
+  Ld           = (1 - d)*L
+  ed           = rev(cumsum( rev(Ld) ))/l
+  le           = cbind(e, ed)
+  return(le)
 }
 
 
 ### Function to calculate age-50 life expectancy for bootstrapped sample
-le_est <- function(d1, d2) {
+le_bs <- function(i,d1, d2) {
   
   # obtain estimates of age-specific mortality rates
-  nuid <- unique(d1$nhispid)
-  nsam <- tibble( sample(nuid, size = length(nuid), replace = T) )
-  colnames(nsam) <- "nhispid"
-  nbs <- nsam %>% left_join(d1, by = "nhispid")
+  if(i == 1) {
+    nbs <- d1
+  }
+  if(i > 1) {
+    nuid <- unique(d1$nhispid)
+    nsam <- tibble( sample(nuid, size = length(nuid), replace = T) )
+    colnames(nsam) <- "nhispid"
+    nbs <- nsam %>% left_join(d1, by = "nhispid")
+  }
   nhis_des <- svydesign(id = ~1, weights = ~mortwt, data = nbs)
   nm  <- svysurvreg(Surv(cerd, died) ~ cage, dist = "exponential", 
                     data = nbs, design = nhis_des)
@@ -83,10 +50,15 @@ le_est <- function(d1, d2) {
   mx <- tapply(ashr, ai, mean)
   
   # obtain estimates of age-specific dual function rates
-  huid <- unique(d2$hhidpn)
-  hsam <- tibble( sample(huid, size = length(huid), replace = T) )
-  colnames(hsam) <- "hhidpn"
-  hbs <- hsam %>% left_join(d2, by = "hhidpn")
+  if(i == 1) {
+    hbs <- d2
+  }
+  if(i > 1) {
+    huid <- unique(d2$hhidpn)
+    hsam <- tibble( sample(huid, size = length(huid), replace = T) )
+    colnames(hsam) <- "hhidpn"
+    hbs <- hsam %>% left_join(d2, by = "hhidpn")
+  }
   hrs_des <- svydesign(id = ~1, weights = ~wtcrnh, data = hbs)
   m1 <- svyglm(df ~ as.factor(agei), data = hbs, family = quasibinomial, 
                design = hrs_des)
@@ -95,14 +67,11 @@ le_est <- function(d1, d2) {
 
   # calculate age-50 total and dual-function life expectancy
   agei <- seq(50, 86, 2)
-  nx   <- c( rep(2, 18), 10 )
-  ax   <- c( rep(1, 18), 5 )
   dfp  <- asdf$response  
-  lt   <- tibble(agei, nx, ax, mx, dfp)
-  e1   <- lifetable(lt)
+  e1   <- sullivan_life_table(m = mx, d = dfp, a = agei)
   
   # combine estimates
-  ec <- c( e1[[1,1]], e1[[1,2]], e1[[1,3]] )
+  ec <- c( e1[1,1], e1[1,2] )
     
   # return estimates
   return(ec)
@@ -116,7 +85,7 @@ hrs  <- read_csv("redfl-asdf-data.csv")
 ### Set seed for reproducing bootstrap results and number of bootstrap samples
 setwd("~/dropbox/research/hlthineq/redfl/redfl-wrk")
 set.seed(23730026)
-nb <- 500
+nb <- 501
 
 ### Bootstrap estimates by nativity and gender
 for(s in 0:1) {
@@ -126,8 +95,8 @@ for(s in 0:1) {
     est <- matrix(NA, nb, 3)
     for(i in 1:nb) {
       print( c(s, g, i) )
-      be <- le_est(nhis_sub, hrs_sub)
-      est[i,] <- c(i, be[2], be[3])
+      be <- le_bs(i, nhis_sub, hrs_sub)
+      est[i,] <- c(i, be[1], be[2])
     }
     colnames(est) <- c("bsam", "e50", "dfe50")
     est <- data.frame(est)
@@ -144,8 +113,8 @@ for(s in 2:3) {
     est <- matrix(NA, nb, 3)
     for(i in 1:nb) {
       print( c(s, g, i) )
-      be <- le_est(nhis_sub, hrs_sub)
-      est[i,] <- c(i, be[2], be[3])
+      be <- le_bs(i, nhis_sub, hrs_sub)
+      est[i,] <- c(i, be[1], be[2])
     }
     colnames(est) <- c("bsam", "e50", "dfe50")
     est <- data.frame(est)
